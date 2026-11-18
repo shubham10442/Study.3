@@ -4,20 +4,233 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StudyDesk — AI Student Study Workspace</title>
-    <meta name="description" content="An AI-powered student study workspace for generating structured study notes, interactive flashcards, practice quizzes, and guided tutoring with Gemini." />
+    <meta name="description" content="A simple HTML and CSS student study web app powered by Gemini for study notes and flashcards." />
     <meta property="og:title" content="StudyDesk — AI Student Study Workspace" />
-    <meta property="og:description" content="An AI-powered student study workspace for generating structured study notes, interactive flashcards, practice quizzes, and guided tutoring with Gemini." />
+    <meta property="og:description" content="A simple HTML and CSS student study web app powered by Gemini for study notes and flashcards." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <link rel="stylesheet" href="/src/styles.css" />
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-sky-100 selection:text-sky-900">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+  <body id="top">
+    <header class="site-header">
+      <div class="header-inner">
+        <a href="#top" id="brand-link" class="brand-wordmark">StudyDesk</a>
+
+        <nav class="main-nav" aria-label="Study modes">
+          <button type="button" class="nav-link is-active" data-mode="notes" aria-current="page">
+            Study Notes
+          </button>
+          <button type="button" class="nav-link" data-mode="flashcards">
+            Flashcards
+          </button>
+        </nav>
+
+        <button type="button" id="reset-btn" class="btn btn-primary">
+          New Session
+        </button>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="intro">
+        <h1 class="page-title">Structured study notes and flashcards from your course material</h1>
+        <p class="page-subtitle">
+          Enter a topic or paste your lecture notes to generate study guides and active-recall flashcards with Gemini.
+        </p>
+      </section>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden>
+        <p><strong>Error:</strong> <span id="error-text"></span></p>
+        <button type="button" id="dismiss-error-btn" class="btn-link">Dismiss</button>
+      </div>
+
+      <div class="workspace">
+        <aside class="card sidebar">
+          <h2 class="heading-md">Study Material</h2>
+          <form id="study-form" class="study-form">
+            <div class="field">
+              <label for="study-topic" class="field-label">Topic or Chapter</label>
+              <input id="study-topic" type="text" class="input" autocomplete="off" />
+            </div>
+
+            <div class="field">
+              <label for="source-notes" class="field-label">Lecture Notes or Text (Optional)</label>
+              <textarea id="source-notes" rows="6" class="input textarea"></textarea>
+            </div>
+
+            <div class="field">
+              <label for="study-files" class="field-label">Upload Files (Optional)</label>
+              <input
+                id="study-files"
+                type="file"
+                class="file-input"
+                multiple
+                accept=".pdf,.txt,.md,.csv,image/*"
+              />
+              <ul id="file-list" class="file-list" hidden></ul>
+            </div>
+
+            <button type="submit" id="generate-btn" class="btn btn-primary btn-full" disabled>
+              Generate Study Notes
+            </button>
+          </form>
+        </aside>
+
+        <section class="card stage" aria-live="polite">
+          <!-- Study Notes View -->
+          <div id="notes-panel">
+            <div id="notes-empty" class="empty-state">
+              <h2 class="heading-lg">Structured Study Notes</h2>
+              <p class="muted-copy">
+                Enter a topic or paste your notes on the left to generate key concepts, examples, and quick takeaways.
+              </p>
+              <button type="button" id="empty-notes-btn" class="btn btn-primary" disabled>
+                Generate Study Notes
+              </button>
+            </div>
+
+            <p id="notes-loading" class="loading-text" hidden>Generating study notes...</p>
+
+            <article id="notes-content" class="notes-article" hidden>
+              <header class="section-header">
+                <div>
+                  <p id="notes-meta" class="meta-line"></p>
+                  <h2 id="notes-title" class="heading-xl"></h2>
+                </div>
+                <div class="button-row">
+                  <button type="button" id="copy-notes-btn" class="btn btn-subtle">Copy Notes</button>
+                  <button type="button" id="regen-notes-btn" class="btn btn-outline">Regenerate</button>
+                </div>
+              </header>
+
+              <section class="notes-block">
+                <h3 class="heading-sm">Overview</h3>
+                <p id="notes-overview" class="prose"></p>
+              </section>
+
+              <section class="notes-block">
+                <h3 class="heading-sm">Key Concepts</h3>
+                <div id="notes-concepts" class="concepts-list"></div>
+              </section>
+
+              <div class="two-col">
+                <section class="notes-block">
+                  <h3 class="heading-sm">Common Mistakes to Avoid</h3>
+                  <ol id="notes-mistakes" class="notes-list"></ol>
+                </section>
+                <section class="notes-block">
+                  <h3 class="heading-sm">Quick Takeaways</h3>
+                  <ul id="notes-takeaways" class="notes-list"></ul>
+                </section>
+              </div>
+
+              <footer class="notes-footer">
+                <span class="muted-text">Ready to test your recall?</span>
+                <button type="button" id="goto-cards-btn" class="btn btn-primary">Study Flashcards</button>
+              </footer>
+            </article>
+          </div>
+
+          <!-- Flashcards View -->
+          <div id="flashcards-panel" hidden>
+            <div id="flashcards-empty" class="empty-state">
+              <h2 class="heading-lg">Active-Recall Flashcards</h2>
+              <p class="muted-copy">
+                Generate a deck of question-and-answer flashcards from your topic or notes to practice active recall.
+              </p>
+              <button type="button" id="empty-cards-btn" class="btn btn-primary" disabled>
+                Generate Flashcards
+              </button>
+            </div>
+
+            <p id="flashcards-loading" class="loading-text" hidden>Generating flashcards...</p>
+
+            <div id="flashcards-content" class="flashcards-view" hidden>
+              <header class="section-header">
+                <div>
+                  <h2 class="heading-lg">Flashcards</h2>
+                  <p id="cards-meta" class="meta-line tabular-nums"></p>
+                </div>
+                <div class="button-row">
+                  <button type="button" id="shuffle-btn" class="btn btn-subtle">Shuffle</button>
+                  <button type="button" id="regen-cards-btn" class="btn btn-outline">New Deck</button>
+                </div>
+              </header>
+
+              <div class="progress-track" aria-hidden="true">
+                <div id="cards-progress" class="progress-fill"></div>
+              </div>
+
+              <div class="card-scene">
+                <div
+                  id="flashcard-el"
+                  class="flashcard"
+                  role="button"
+                  tabindex="0"
+                  aria-pressed="false"
+                  aria-label="Flashcard. Click or press Space to flip."
+                >
+                  <div class="flashcard-face flashcard-front">
+                    <div class="card-edge">
+                      <span>Question</span>
+                      <span id="card-status" class="card-status"></span>
+                    </div>
+                    <div class="card-body">
+                      <p id="card-front-text" class="card-question"></p>
+                      <p id="card-hint-box" class="card-hint" hidden></p>
+                    </div>
+                    <div class="card-edge">
+                      <span>Click card or press Space to flip</span>
+                      <strong>Flip</strong>
+                    </div>
+                  </div>
+
+                  <div class="flashcard-face flashcard-back">
+                    <div class="card-edge">
+                      <span class="accent-text">Answer</span>
+                      <span id="card-back-index" class="tabular-nums"></span>
+                    </div>
+                    <div class="card-body">
+                      <p id="card-back-text" class="card-answer"></p>
+                    </div>
+                    <div class="card-edge">
+                      <span>Click card or press Space to see question</span>
+                      <strong class="accent-text">Flip back</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flashcards-controls">
+                <div class="button-row">
+                  <button type="button" id="prev-btn" class="btn btn-subtle">Previous</button>
+                  <button type="button" id="next-btn" class="btn btn-subtle">Next</button>
+                  <button type="button" id="hint-btn" class="btn btn-ghost">Show Hint</button>
+                </div>
+                <div class="button-row">
+                  <button type="button" id="review-btn" class="btn btn-outline">Review Again</button>
+                  <button type="button" id="mastered-btn" class="btn btn-success">Got It</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <span>StudyDesk · Student Study Workspace</span>
+        <span>Verify key facts and formulas against your course syllabus.</span>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/app.js"></script>
   </body>
 </html>
