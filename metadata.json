@@ -1,0 +1,6 @@
+{
+  "name": "StudyDesk",
+  "description": "An AI-powered student study workspace for generating structured study notes, interactive flashcards, practice quizzes, and guided tutoring with Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
