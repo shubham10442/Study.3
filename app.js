@@ -1,7 +1,4 @@
 const STORAGE_KEY = 'studydesk_html_session_v1';
-// Leave empty when frontend and server.js run together.
-// If hosting only the frontend on GitHub Pages, set this to your deployed Node.js backend URL (e.g. 'https://your-app.onrender.com').
-const API_BASE = '';
 
 function getEl(id) {
   const el = document.getElementById(id);
@@ -273,8 +270,7 @@ async function fetchStudyData(type) {
   render();
 
   try {
-    const apiBase = API_BASE.replace(/\/+$/, '');
-    const response = await fetch(`${apiBase}/api/study/${type}`, {
+    const response = await fetch(`/api/study/${type}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -289,11 +285,6 @@ async function fetchStudyData(type) {
     try {
       data = rawBody ? JSON.parse(rawBody) : {};
     } catch {
-      if (response.status === 404 || response.status === 405) {
-        throw new Error(
-          'Backend API not found. Deploy server.js on a Node.js host (like Render or Railway) and set API_BASE in app.js.'
-        );
-      }
       throw new Error(`Server error (${response.status}). Please try again.`);
     }
 
