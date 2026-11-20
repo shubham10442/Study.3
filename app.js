@@ -1,20 +1,5 @@
 const STORAGE_KEY = 'studydesk_html_session_v1';
 
-/**
- * @typedef {{ name: string, mimeType: string, size: number, data: string, isText: boolean }} UploadedFile
- * @typedef {{ title?: string, explanation?: string, example?: string }} KeyConcept
- * @typedef {{
- *   topicTitle?: string,
- *   subject?: string,
- *   overview?: string,
- *   keyConcepts?: KeyConcept[],
- *   commonMistakes?: string[],
- *   takeaways?: string[]
- * }} StudyNotes
- * @typedef {{ id: string, front: string, back: string, hint: string }} Flashcard
- */
-
-/** @param {string} id */
 function getEl(id) {
   const el = document.getElementById(id);
   if (!el) throw new Error(`Missing required element #${id}`);
@@ -34,37 +19,28 @@ const saved = loadSession();
 
 const savedNotes =
   saved?.notes && typeof saved.notes === 'object' && !Array.isArray(saved.notes)
-    ? /** @type {StudyNotes} */ (saved.notes)
+    ? saved.notes
     : null;
 
 const savedFlashcards = Array.isArray(saved?.flashcards)
-  ? /** @type {Flashcard[]} */ (
-      saved.flashcards.filter(
-        /** @param {unknown} c */ (c) =>
-          Boolean(c && typeof c === 'object' && typeof (/** @type {Flashcard} */ (c)).front === 'string')
-      )
-    )
+  ? saved.flashcards.filter((card) => Boolean(card && typeof card === 'object' && typeof card.front === 'string'))
   : [];
 
 const state = {
-  mode: /** @type {'notes' | 'flashcards'} */ ('notes'),
+  mode: 'notes',
   topic: typeof saved?.topic === 'string' ? saved.topic : '',
   sourceNotes: typeof saved?.sourceNotes === 'string' ? saved.sourceNotes : '',
-  files: /** @type {UploadedFile[]} */ ([]),
+  files: [],
   notes: savedNotes,
   flashcards: savedFlashcards,
   currentIndex: 0,
   isFlipped: false,
   showHint: false,
-  masteredIds: /** @type {Record<string, boolean>} */ (
-    saved?.mastered && typeof saved.mastered === 'object' ? saved.mastered : {}
-  ),
-  reviewIds: /** @type {Record<string, boolean>} */ (
-    saved?.review && typeof saved.review === 'object' ? saved.review : {}
-  ),
+  masteredIds: saved?.mastered && typeof saved.mastered === 'object' ? saved.mastered : {},
+  reviewIds: saved?.review && typeof saved.review === 'object' ? saved.review : {},
   isLoadingNotes: false,
   isLoadingCards: false,
-  error: /** @type {string | null} */ (null),
+  error: null,
 };
 
 function saveSession() {
@@ -85,11 +61,6 @@ function saveSession() {
   }
 }
 
-/**
- * @param {string} tag
- * @param {string} [className]
- * @param {string} [text]
- */
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -101,28 +72,25 @@ function hasStudyInput() {
   return Boolean(state.topic.trim() || state.sourceNotes.trim() || state.files.length > 0);
 }
 
-const topicInput = /** @type {HTMLInputElement} */ (getEl('study-topic'));
-const notesInput = /** @type {HTMLTextAreaElement} */ (getEl('source-notes'));
-const filesInput = /** @type {HTMLInputElement} */ (getEl('study-files'));
-const generateBtn = /** @type {HTMLButtonElement} */ (getEl('generate-btn'));
-const emptyNotesBtn = /** @type {HTMLButtonElement} */ (getEl('empty-notes-btn'));
-const emptyCardsBtn = /** @type {HTMLButtonElement} */ (getEl('empty-cards-btn'));
-const regenNotesBtn = /** @type {HTMLButtonElement} */ (getEl('regen-notes-btn'));
-const regenCardsBtn = /** @type {HTMLButtonElement} */ (getEl('regen-cards-btn'));
+const topicInput = getEl('study-topic');
+const notesInput = getEl('source-notes');
+const filesInput = getEl('study-files');
+const generateBtn = getEl('generate-btn');
+const emptyNotesBtn = getEl('empty-notes-btn');
+const emptyCardsBtn = getEl('empty-cards-btn');
+const regenNotesBtn = getEl('regen-notes-btn');
+const regenCardsBtn = getEl('regen-cards-btn');
 const modeButtons = document.querySelectorAll('[data-mode]');
 
-/** @param {number} bytes */
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** @param {File} file */
 function getMimeType(file) {
   if (file.type) return file.type;
   const ext = file.name.split('.').pop()?.toLowerCase() || '';
-  /** @type {Record<string, string>} */
   const mimeMap = {
     pdf: 'application/pdf',
     png: 'image/png',
@@ -150,7 +118,7 @@ function renderFileList() {
       createElement('span', 'file-size tabular-nums', formatFileSize(file.size))
     );
 
-    const removeBtn = /** @type {HTMLButtonElement} */ (createElement('button', 'file-remove-btn', 'Remove'));
+    const removeBtn = createElement('button', 'file-remove-btn', 'Remove');
     removeBtn.type = 'button';
     removeBtn.addEventListener('click', () => {
       state.files.splice(index, 1);
@@ -288,12 +256,11 @@ function renderFlashcards() {
   hintBtn.hidden = state.isFlipped;
   hintBtn.textContent = state.showHint ? 'Hide Hint' : 'Show Hint';
 
-  /** @type {HTMLButtonElement} */ (getEl('prev-btn')).disabled = state.currentIndex === 0;
-  /** @type {HTMLButtonElement} */ (getEl('next-btn')).disabled = state.currentIndex === total - 1;
+  getEl('prev-btn').disabled = state.currentIndex === 0;
+  getEl('next-btn').disabled = state.currentIndex === total - 1;
   getEl('review-btn').classList.toggle('is-active-warning', isReview);
 }
 
-/** @param {'notes' | 'flashcards'} type */
 async function fetchStudyData(type) {
   if (!hasStudyInput() || state.isLoadingNotes || state.isLoadingCards) return;
 
@@ -314,7 +281,6 @@ async function fetchStudyData(type) {
     });
 
     const rawBody = await response.text();
-    /** @type {{ notes?: StudyNotes, flashcards?: Flashcard[], error?: string }} */
     let data = {};
     try {
       data = rawBody ? JSON.parse(rawBody) : {};
@@ -346,7 +312,6 @@ async function fetchStudyData(type) {
   }
 }
 
-/** @param {number} index */
 function goToCard(index) {
   state.currentIndex = index;
   state.isFlipped = false;
@@ -354,7 +319,6 @@ function goToCard(index) {
   renderFlashcards();
 }
 
-/** @param {'mastered' | 'review'} status */
 function markCard(status) {
   const card = state.flashcards[state.currentIndex];
   if (!card) return;
@@ -374,10 +338,6 @@ function toggleCardFlip() {
   renderFlashcards();
 }
 
-/**
- * @param {File} file
- * @returns {Promise<UploadedFile>}
- */
 function readUploadedFile(file) {
   return new Promise((resolve, reject) => {
     const isText = file.type.startsWith('text/') || /\.(txt|md|csv)$/i.test(file.name);
@@ -477,19 +437,19 @@ getEl('brand-link').addEventListener('click', (e) => {
 
 getEl('study-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  void fetchStudyData(state.mode);
+  fetchStudyData(state.mode);
 });
 
-emptyNotesBtn.addEventListener('click', () => void fetchStudyData('notes'));
-regenNotesBtn.addEventListener('click', () => void fetchStudyData('notes'));
-emptyCardsBtn.addEventListener('click', () => void fetchStudyData('flashcards'));
-regenCardsBtn.addEventListener('click', () => void fetchStudyData('flashcards'));
+emptyNotesBtn.addEventListener('click', () => fetchStudyData('notes'));
+regenNotesBtn.addEventListener('click', () => fetchStudyData('notes'));
+emptyCardsBtn.addEventListener('click', () => fetchStudyData('flashcards'));
+regenCardsBtn.addEventListener('click', () => fetchStudyData('flashcards'));
 
 getEl('goto-cards-btn').addEventListener('click', () => {
   state.mode = 'flashcards';
   render();
   if (state.flashcards.length === 0 && hasStudyInput() && !state.isLoadingCards) {
-    void fetchStudyData('flashcards');
+    fetchStudyData('flashcards');
   }
 });
 
@@ -597,7 +557,7 @@ getEl('reset-btn').addEventListener('click', () => {
 
 window.addEventListener('keydown', (e) => {
   if (state.mode !== 'flashcards' || state.flashcards.length === 0) return;
-  const tag = /** @type {HTMLElement | null} */ (e.target)?.tagName;
+  const tag = e.target?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A' || tag === 'SELECT') {
     return;
   }

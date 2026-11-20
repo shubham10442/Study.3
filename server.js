@@ -1,7 +1,5 @@
 import 'dotenv/config';
 import express from 'express';
-import type { NextFunction, Request, Response } from 'express';
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -10,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const MODEL = 'gemini-4-hydrogen';
 
-function createGeminiClient(): GoogleGenAI {
+function createGeminiClient() {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY is missing. Please set it in Settings > Secrets.');
   }
@@ -22,22 +20,13 @@ function createGeminiClient(): GoogleGenAI {
   });
 }
 
-interface UploadedFile {
-  name: string;
-  mimeType: string;
-  data: string;
-  isText?: boolean;
-}
-
-type ContentPart = { text: string } | { inlineData: { mimeType: string; data: string } };
-
-function getErrorStatus(err: unknown): number {
-  const errorObj = (err || {}) as { status?: number; code?: number; message?: string };
+function getErrorStatus(err) {
+  const errorObj = err || {};
   if (typeof errorObj.status === 'number' && errorObj.status >= 400) return errorObj.status;
   if (typeof errorObj.code === 'number' && errorObj.code >= 400) return errorObj.code;
   if (typeof errorObj.message === 'string') {
     try {
-      const parsed = JSON.parse(errorObj.message) as { error?: { code?: number } };
+      const parsed = JSON.parse(errorObj.message);
       if (typeof parsed?.error?.code === 'number') return parsed.error.code;
     } catch {
       // Not JSON
@@ -46,8 +35,8 @@ function getErrorStatus(err: unknown): number {
   return 500;
 }
 
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
-  let lastError: unknown;
+async function withRetry(fn, maxRetries = 3) {
+  let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
@@ -65,11 +54,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
   throw lastError;
 }
 
-async function generateStructuredJson(
-  parts: ContentPart[],
-  systemInstruction: string,
-  responseSchema: Record<string, unknown>
-) {
+async function generateStructuredJson(parts, systemInstruction, responseSchema) {
   const ai = createGeminiClient();
   const response = await withRetry(() =>
     ai.models.generateContent({
@@ -95,9 +80,9 @@ async function generateStructuredJson(
   }
 }
 
-function extractCleanErrorMessage(rawMessage: string): string {
+function extractCleanErrorMessage(rawMessage) {
   try {
-    const parsed = JSON.parse(rawMessage) as { error?: { message?: string } };
+    const parsed = JSON.parse(rawMessage);
     if (parsed?.error?.message) {
       return parsed.error.message;
     }
@@ -107,9 +92,8 @@ function extractCleanErrorMessage(rawMessage: string): string {
   return rawMessage;
 }
 
-function handleApiError(res: Response, error: unknown) {
-  const err = (error || {}) as { message?: string };
-  const rawMessage = err.message || 'Could not reach Gemini API.';
+function handleApiError(res, error) {
+  const rawMessage = error?.message || 'Could not reach Gemini API.';
   const cleanMessage = extractCleanErrorMessage(rawMessage);
   const status = getErrorStatus(error);
   const lower = cleanMessage.toLowerCase();
@@ -137,13 +121,8 @@ function handleApiError(res: Response, error: unknown) {
   return res.status(status).json({ error: cleanMessage });
 }
 
-function buildStudyParts(
-  instruction: string,
-  topic = '',
-  sourceNotes = '',
-  files: UploadedFile[] = []
-): ContentPart[] {
-  const parts: ContentPart[] = [];
+function buildStudyParts(instruction, topic = '', sourceNotes = '', files = []) {
+  const parts = [];
 
   for (const file of files) {
     if (!file || typeof file.data !== 'string' || !file.data.trim()) continue;
@@ -154,7 +133,7 @@ function buildStudyParts(
     }
   }
 
-  const textLines: string[] = [instruction];
+  const textLines = [instruction];
   if (topic.trim()) textLines.push(`Topic: ${topic.trim()}`);
   if (sourceNotes.trim()) textLines.push(`Notes:\n${sourceNotes.trim()}`);
 
@@ -162,23 +141,12 @@ function buildStudyParts(
   return parts;
 }
 
-function parseStudyRequest(body: unknown): {
-  topic: string;
-  sourceNotes: string;
-  files: UploadedFile[];
-  hasValidContent: boolean;
-} {
-  const raw = (body && typeof body === 'object' ? body : {}) as {
-    topic?: unknown;
-    sourceNotes?: unknown;
-    files?: unknown;
-  };
+function parseStudyRequest(body) {
+  const raw = body && typeof body === 'object' ? body : {};
   const topic = typeof raw.topic === 'string' ? raw.topic : '';
   const sourceNotes = typeof raw.sourceNotes === 'string' ? raw.sourceNotes : '';
   const files = Array.isArray(raw.files)
-    ? (raw.files as UploadedFile[]).filter(
-        (f) => f && typeof f.data === 'string' && f.data.trim().length > 0
-      )
+    ? raw.files.filter((f) => f && typeof f.data === 'string' && f.data.trim().length > 0)
     : [];
   const hasValidContent = Boolean(topic.trim() || sourceNotes.trim() || files.length > 0);
   return { topic, sourceNotes, files, hasValidContent };
@@ -225,20 +193,19 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '25mb' }));
 
-  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
-    const expressErr = err as { type?: string; status?: number };
-    if (expressErr?.type === 'entity.too.large') {
+  app.use((err, _req, res, next) => {
+    if (err?.type === 'entity.too.large') {
       return res.status(413).json({
         error: 'Uploaded files are too large. Please keep total upload size under 18 MB.',
       });
     }
-    if (expressErr?.type === 'entity.parse.failed') {
+    if (err?.type === 'entity.parse.failed') {
       return res.status(400).json({ error: 'Invalid JSON request payload.' });
     }
     return next(err);
   });
 
-  app.post('/api/study/notes', async (req: Request, res: Response) => {
+  app.post('/api/study/notes', async (req, res) => {
     try {
       const { topic, sourceNotes, files, hasValidContent } = parseStudyRequest(req.body);
       if (!hasValidContent) {
@@ -265,7 +232,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/study/flashcards', async (req: Request, res: Response) => {
+  app.post('/api/study/flashcards', async (req, res) => {
     try {
       const { topic, sourceNotes, files, hasValidContent } = parseStudyRequest(req.body);
       if (!hasValidContent) {
@@ -287,7 +254,7 @@ async function startServer() {
         throw new Error('Could not generate flashcards. Please try again.');
       }
 
-      const flashcards = cards.map((card: { front?: string; back?: string; hint?: string }, index: number) => ({
+      const flashcards = cards.map((card, index) => ({
         id: `card-${Date.now()}-${index}`,
         front: String(card?.front ?? ''),
         back: String(card?.back ?? ''),
@@ -299,22 +266,20 @@ async function startServer() {
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer } = await import('vite');
-    const vite = await createServer({ server: { middlewareMode: true }, appType: 'spa' });
-    app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      const indexFile = path.join(distDir, 'index.html');
-      if (fs.existsSync(indexFile)) {
-        res.sendFile(indexFile);
-      } else {
-        res.status(404).send('Build output not found. Run npm run build first.');
-      }
-    });
-  }
+  app.get('/styles.css', (_req, res) => {
+    res.sendFile(path.join(__dirname, 'styles.css'));
+  });
+
+  app.get('/app.js', (_req, res) => {
+    res.sendFile(path.join(__dirname, 'app.js'));
+  });
+
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) {
+      return res.status(404).json({ error: 'API endpoint not found.' });
+    }
+    return res.sendFile(path.join(__dirname, 'index.html'));
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`StudyDesk running on http://0.0.0.0:${PORT}`);
