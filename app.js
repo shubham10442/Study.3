@@ -1,8 +1,30 @@
 const STORAGE_KEY = 'studydesk_html_session_v1';
 
+/**
+ * @typedef {{ name: string, mimeType: string, size: number, data: string, isText: boolean }} UploadedFile
+ * @typedef {{ title?: string, explanation?: string, example?: string }} KeyConcept
+ * @typedef {{
+ *   topicTitle?: string,
+ *   subject?: string,
+ *   overview?: string,
+ *   keyConcepts?: KeyConcept[],
+ *   commonMistakes?: string[],
+ *   takeaways?: string[]
+ * }} StudyNotes
+ * @typedef {{ id: string, front: string, back: string, hint: string }} Flashcard
+ */
+
+/** @param {string} id */
+function getEl(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`Missing required element #${id}`);
+  return el;
+}
+
 function loadSession() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }
@@ -10,21 +32,39 @@ function loadSession() {
 
 const saved = loadSession();
 
+const savedNotes =
+  saved?.notes && typeof saved.notes === 'object' && !Array.isArray(saved.notes)
+    ? /** @type {StudyNotes} */ (saved.notes)
+    : null;
+
+const savedFlashcards = Array.isArray(saved?.flashcards)
+  ? /** @type {Flashcard[]} */ (
+      saved.flashcards.filter(
+        /** @param {unknown} c */ (c) =>
+          Boolean(c && typeof c === 'object' && typeof (/** @type {Flashcard} */ (c)).front === 'string')
+      )
+    )
+  : [];
+
 const state = {
   mode: /** @type {'notes' | 'flashcards'} */ ('notes'),
-  topic: saved?.topic || '',
-  sourceNotes: saved?.sourceNotes || '',
-  files: /** @type {Array<{ name: string, mimeType: string, size: number, data: string, isText: boolean }>} */ ([]),
-  notes: saved?.notes || null,
-  flashcards: Array.isArray(saved?.flashcards) ? saved.flashcards : [],
+  topic: typeof saved?.topic === 'string' ? saved.topic : '',
+  sourceNotes: typeof saved?.sourceNotes === 'string' ? saved.sourceNotes : '',
+  files: /** @type {UploadedFile[]} */ ([]),
+  notes: savedNotes,
+  flashcards: savedFlashcards,
   currentIndex: 0,
   isFlipped: false,
   showHint: false,
-  masteredIds: saved?.mastered || {},
-  reviewIds: saved?.review || {},
+  masteredIds: /** @type {Record<string, boolean>} */ (
+    saved?.mastered && typeof saved.mastered === 'object' ? saved.mastered : {}
+  ),
+  reviewIds: /** @type {Record<string, boolean>} */ (
+    saved?.review && typeof saved.review === 'object' ? saved.review : {}
+  ),
   isLoadingNotes: false,
   isLoadingCards: false,
-  error: null,
+  error: /** @type {string | null} */ (null),
 };
 
 function saveSession() {
@@ -45,6 +85,11 @@ function saveSession() {
   }
 }
 
+/**
+ * @param {string} tag
+ * @param {string} [className]
+ * @param {string} [text]
+ */
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -56,22 +101,44 @@ function hasStudyInput() {
   return Boolean(state.topic.trim() || state.sourceNotes.trim() || state.files.length > 0);
 }
 
-const topicInput = /** @type {HTMLInputElement} */ (document.getElementById('study-topic'));
-const notesInput = /** @type {HTMLTextAreaElement} */ (document.getElementById('source-notes'));
-const filesInput = /** @type {HTMLInputElement} */ (document.getElementById('study-files'));
-const generateBtn = /** @type {HTMLButtonElement} */ (document.getElementById('generate-btn'));
-const emptyNotesBtn = /** @type {HTMLButtonElement} */ (document.getElementById('empty-notes-btn'));
-const emptyCardsBtn = /** @type {HTMLButtonElement} */ (document.getElementById('empty-cards-btn'));
+const topicInput = /** @type {HTMLInputElement} */ (getEl('study-topic'));
+const notesInput = /** @type {HTMLTextAreaElement} */ (getEl('source-notes'));
+const filesInput = /** @type {HTMLInputElement} */ (getEl('study-files'));
+const generateBtn = /** @type {HTMLButtonElement} */ (getEl('generate-btn'));
+const emptyNotesBtn = /** @type {HTMLButtonElement} */ (getEl('empty-notes-btn'));
+const emptyCardsBtn = /** @type {HTMLButtonElement} */ (getEl('empty-cards-btn'));
+const regenNotesBtn = /** @type {HTMLButtonElement} */ (getEl('regen-notes-btn'));
+const regenCardsBtn = /** @type {HTMLButtonElement} */ (getEl('regen-cards-btn'));
 const modeButtons = document.querySelectorAll('[data-mode]');
 
+/** @param {number} bytes */
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** @param {File} file */
+function getMimeType(file) {
+  if (file.type) return file.type;
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  /** @type {Record<string, string>} */
+  const mimeMap = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    csv: 'text/csv',
+  };
+  return mimeMap[ext] || 'application/octet-stream';
+}
+
 function renderFileList() {
-  const list = document.getElementById('file-list');
+  const list = getEl('file-list');
   list.hidden = state.files.length === 0;
   list.replaceChildren();
 
@@ -106,13 +173,15 @@ function render() {
       ? 'Generate Flashcards'
       : 'Generate Study Notes';
 
-  emptyNotesBtn.disabled = state.isLoadingNotes || !ready;
-  emptyCardsBtn.disabled = state.isLoadingCards || !ready;
+  emptyNotesBtn.disabled = busy || !ready;
+  emptyCardsBtn.disabled = busy || !ready;
+  regenNotesBtn.disabled = busy || !ready;
+  regenCardsBtn.disabled = busy || !ready;
 
-  const errorBanner = document.getElementById('error-banner');
+  const errorBanner = getEl('error-banner');
   errorBanner.hidden = !state.error;
   if (state.error) {
-    document.getElementById('error-text').textContent = state.error;
+    getEl('error-text').textContent = state.error;
   }
 
   modeButtons.forEach((button) => {
@@ -125,8 +194,8 @@ function render() {
     }
   });
 
-  document.getElementById('notes-panel').hidden = state.mode !== 'notes';
-  document.getElementById('flashcards-panel').hidden = state.mode !== 'flashcards';
+  getEl('notes-panel').hidden = state.mode !== 'notes';
+  getEl('flashcards-panel').hidden = state.mode !== 'flashcards';
 
   renderFileList();
   renderNotes();
@@ -134,21 +203,21 @@ function render() {
 }
 
 function renderNotes() {
-  document.getElementById('notes-loading').hidden = !state.isLoadingNotes;
-  document.getElementById('notes-empty').hidden = state.isLoadingNotes || Boolean(state.notes);
-  document.getElementById('notes-content').hidden = state.isLoadingNotes || !state.notes;
+  getEl('notes-loading').hidden = !state.isLoadingNotes;
+  getEl('notes-empty').hidden = state.isLoadingNotes || Boolean(state.notes);
+  getEl('notes-content').hidden = state.isLoadingNotes || !state.notes;
 
   if (state.isLoadingNotes || !state.notes) return;
 
   const notes = state.notes;
   const concepts = Array.isArray(notes.keyConcepts) ? notes.keyConcepts : [];
 
-  document.getElementById('notes-meta').textContent =
+  getEl('notes-meta').textContent =
     `${notes.subject || 'General'} · ${concepts.length} Key Concepts`;
-  document.getElementById('notes-title').textContent = notes.topicTitle || 'Study Notes';
-  document.getElementById('notes-overview').textContent = notes.overview || '';
+  getEl('notes-title').textContent = notes.topicTitle || 'Study Notes';
+  getEl('notes-overview').textContent = notes.overview || '';
 
-  const conceptsContainer = document.getElementById('notes-concepts');
+  const conceptsContainer = getEl('notes-concepts');
   conceptsContainer.replaceChildren();
 
   concepts.forEach((concept, index) => {
@@ -156,32 +225,32 @@ function renderNotes() {
     const title = createElement('h4', 'concept-title');
     title.append(
       createElement('span', 'concept-index', `${String(index + 1).padStart(2, '0')}.`),
-      concept.title
+      concept?.title || ''
     );
 
     const example = createElement('div', 'example-box');
-    example.append(createElement('strong', '', 'Example: '), concept.example);
+    example.append(createElement('strong', '', 'Example: '), concept?.example || '');
 
-    item.append(title, createElement('p', 'prose', concept.explanation), example);
+    item.append(title, createElement('p', 'prose', concept?.explanation || ''), example);
     conceptsContainer.appendChild(item);
   });
 
-  const mistakesList = document.getElementById('notes-mistakes');
-  mistakesList.replaceChildren(
-    ...(notes.commonMistakes || []).map((mistake) => createElement('li', '', mistake))
+  const mistakes = Array.isArray(notes.commonMistakes) ? notes.commonMistakes : [];
+  getEl('notes-mistakes').replaceChildren(
+    ...mistakes.map((mistake) => createElement('li', '', String(mistake)))
   );
 
-  const takeawaysList = document.getElementById('notes-takeaways');
-  takeawaysList.replaceChildren(
-    ...(notes.takeaways || []).map((takeaway) => createElement('li', '', takeaway))
+  const takeaways = Array.isArray(notes.takeaways) ? notes.takeaways : [];
+  getEl('notes-takeaways').replaceChildren(
+    ...takeaways.map((takeaway) => createElement('li', '', String(takeaway)))
   );
 }
 
 function renderFlashcards() {
   const total = state.flashcards.length;
-  document.getElementById('flashcards-loading').hidden = !state.isLoadingCards;
-  document.getElementById('flashcards-empty').hidden = state.isLoadingCards || total > 0;
-  document.getElementById('flashcards-content').hidden = state.isLoadingCards || total === 0;
+  getEl('flashcards-loading').hidden = !state.isLoadingCards;
+  getEl('flashcards-empty').hidden = state.isLoadingCards || total > 0;
+  getEl('flashcards-content').hidden = state.isLoadingCards || total === 0;
 
   if (state.isLoadingCards || total === 0) return;
 
@@ -191,39 +260,40 @@ function renderFlashcards() {
   const masteredCount = Object.values(state.masteredIds).filter(Boolean).length;
   const reviewCount = Object.values(state.reviewIds).filter(Boolean).length;
 
-  document.getElementById('cards-meta').textContent =
+  getEl('cards-meta').textContent =
     `Card ${state.currentIndex + 1} of ${total} · ${masteredCount} Mastered · ${reviewCount} Needs Review`;
 
   const progress = Math.round(((state.currentIndex + 1) / total) * 100);
-  document.getElementById('cards-progress').style.width = `${progress}%`;
+  getEl('cards-progress').style.width = `${progress}%`;
 
-  const cardElement = document.getElementById('flashcard-el');
+  const cardElement = getEl('flashcard-el');
   cardElement.classList.toggle('is-flipped', state.isFlipped);
   cardElement.setAttribute('aria-pressed', String(state.isFlipped));
 
-  document.getElementById('card-front-text').textContent = card.front;
-  document.getElementById('card-back-text').textContent = card.back;
-  document.getElementById('card-back-index').textContent = `Card ${state.currentIndex + 1}`;
+  getEl('card-front-text').textContent = card.front || '';
+  getEl('card-back-text').textContent = card.back || '';
+  getEl('card-back-index').textContent = `Card ${state.currentIndex + 1}`;
 
   const isMastered = Boolean(state.masteredIds[card.id]);
   const isReview = Boolean(state.reviewIds[card.id]);
-  const statusEl = document.getElementById('card-status');
+  const statusEl = getEl('card-status');
   statusEl.className = `card-status${isMastered ? ' is-mastered' : isReview ? ' is-review' : ''}`;
   statusEl.textContent = isMastered ? 'Mastered' : isReview ? 'Needs Review' : '';
 
-  const hintBox = document.getElementById('card-hint-box');
+  const hintBox = getEl('card-hint-box');
   hintBox.hidden = !(state.showHint && !state.isFlipped);
-  hintBox.textContent = `Hint: ${card.hint}`;
+  hintBox.textContent = card.hint ? `Hint: ${card.hint}` : 'No hint available.';
 
-  const hintBtn = document.getElementById('hint-btn');
+  const hintBtn = getEl('hint-btn');
   hintBtn.hidden = state.isFlipped;
   hintBtn.textContent = state.showHint ? 'Hide Hint' : 'Show Hint';
 
-  /** @type {HTMLButtonElement} */ (document.getElementById('prev-btn')).disabled = state.currentIndex === 0;
-  /** @type {HTMLButtonElement} */ (document.getElementById('next-btn')).disabled = state.currentIndex === total - 1;
-  document.getElementById('review-btn').classList.toggle('is-active-warning', isReview);
+  /** @type {HTMLButtonElement} */ (getEl('prev-btn')).disabled = state.currentIndex === 0;
+  /** @type {HTMLButtonElement} */ (getEl('next-btn')).disabled = state.currentIndex === total - 1;
+  getEl('review-btn').classList.toggle('is-active-warning', isReview);
 }
 
+/** @param {'notes' | 'flashcards'} type */
 async function fetchStudyData(type) {
   if (!hasStudyInput() || state.isLoadingNotes || state.isLoadingCards) return;
 
@@ -244,6 +314,7 @@ async function fetchStudyData(type) {
     });
 
     const rawBody = await response.text();
+    /** @type {{ notes?: StudyNotes, flashcards?: Flashcard[], error?: string }} */
     let data = {};
     try {
       data = rawBody ? JSON.parse(rawBody) : {};
@@ -255,9 +326,9 @@ async function fetchStudyData(type) {
       throw new Error(data.error || `Could not generate ${type}.`);
     }
 
-    if (type === 'notes') {
+    if (type === 'notes' && data.notes) {
       state.notes = data.notes;
-    } else {
+    } else if (type === 'flashcards' && Array.isArray(data.flashcards)) {
       state.flashcards = data.flashcards;
       state.currentIndex = 0;
       state.isFlipped = false;
@@ -275,6 +346,7 @@ async function fetchStudyData(type) {
   }
 }
 
+/** @param {number} index */
 function goToCard(index) {
   state.currentIndex = index;
   state.isFlipped = false;
@@ -282,6 +354,7 @@ function goToCard(index) {
   renderFlashcards();
 }
 
+/** @param {'mastered' | 'review'} status */
 function markCard(status) {
   const card = state.flashcards[state.currentIndex];
   if (!card) return;
@@ -299,6 +372,29 @@ function markCard(status) {
 function toggleCardFlip() {
   state.isFlipped = !state.isFlipped;
   renderFlashcards();
+}
+
+/**
+ * @param {File} file
+ * @returns {Promise<UploadedFile>}
+ */
+function readUploadedFile(file) {
+  return new Promise((resolve, reject) => {
+    const isText = file.type.startsWith('text/') || /\.(txt|md|csv)$/i.test(file.name);
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const data = isText ? result : result.split(',')[1] || '';
+      const mimeType = getMimeType(file);
+      resolve({ name: file.name, mimeType, size: file.size, data, isText });
+    };
+    if (isText) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsDataURL(file);
+    }
+  });
 }
 
 // Initialize inputs and view
@@ -319,26 +415,6 @@ notesInput.addEventListener('input', () => {
   render();
 });
 
-function readUploadedFile(file) {
-  return new Promise((resolve, reject) => {
-    const isText =
-      file.type.startsWith('text/') || /\.(txt|md|csv)$/i.test(file.name);
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      const data = isText ? result : result.split(',')[1] || '';
-      const mimeType = file.type || (isText ? 'text/plain' : 'application/pdf');
-      resolve({ name: file.name, mimeType, size: file.size, data, isText });
-    };
-    if (isText) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsDataURL(file);
-    }
-  });
-}
-
 filesInput.addEventListener('change', async () => {
   const selected = Array.from(filesInput.files || []);
   filesInput.value = '';
@@ -351,6 +427,11 @@ filesInput.addEventListener('change', async () => {
   }
 
   for (const file of selected) {
+    if (file.size === 0) {
+      state.error = `${file.name} is empty.`;
+      render();
+      return;
+    }
     if (file.size > 10 * 1024 * 1024) {
       state.error = `${file.name} exceeds the 10 MB file size limit.`;
       render();
@@ -380,28 +461,31 @@ filesInput.addEventListener('change', async () => {
 
 modeButtons.forEach((button) => {
   button.addEventListener('click', () => {
-    state.mode = /** @type {'notes' | 'flashcards'} */ (button.getAttribute('data-mode'));
-    render();
+    const mode = button.getAttribute('data-mode');
+    if (mode === 'notes' || mode === 'flashcards') {
+      state.mode = mode;
+      render();
+    }
   });
 });
 
-document.getElementById('brand-link').addEventListener('click', (e) => {
+getEl('brand-link').addEventListener('click', (e) => {
   e.preventDefault();
   state.mode = 'notes';
   render();
 });
 
-document.getElementById('study-form').addEventListener('submit', (e) => {
+getEl('study-form').addEventListener('submit', (e) => {
   e.preventDefault();
   void fetchStudyData(state.mode);
 });
 
 emptyNotesBtn.addEventListener('click', () => void fetchStudyData('notes'));
-document.getElementById('regen-notes-btn').addEventListener('click', () => void fetchStudyData('notes'));
+regenNotesBtn.addEventListener('click', () => void fetchStudyData('notes'));
 emptyCardsBtn.addEventListener('click', () => void fetchStudyData('flashcards'));
-document.getElementById('regen-cards-btn').addEventListener('click', () => void fetchStudyData('flashcards'));
+regenCardsBtn.addEventListener('click', () => void fetchStudyData('flashcards'));
 
-document.getElementById('goto-cards-btn').addEventListener('click', () => {
+getEl('goto-cards-btn').addEventListener('click', () => {
   state.mode = 'flashcards';
   render();
   if (state.flashcards.length === 0 && hasStudyInput() && !state.isLoadingCards) {
@@ -409,26 +493,26 @@ document.getElementById('goto-cards-btn').addEventListener('click', () => {
   }
 });
 
-document.getElementById('dismiss-error-btn').addEventListener('click', () => {
+getEl('dismiss-error-btn').addEventListener('click', () => {
   state.error = null;
   render();
 });
 
-document.getElementById('copy-notes-btn').addEventListener('click', async () => {
+getEl('copy-notes-btn').addEventListener('click', async () => {
   if (!state.notes) return;
   const n = state.notes;
   const markdown = [
-    `# ${n.topicTitle}`,
-    `Subject: ${n.subject}`,
+    `# ${n.topicTitle || 'Study Notes'}`,
+    `Subject: ${n.subject || 'General'}`,
     '',
     '## Overview',
-    n.overview,
+    n.overview || '',
     '',
     '## Key Concepts',
     ...(n.keyConcepts || []).flatMap((c, i) => [
-      `### ${i + 1}. ${c.title}`,
-      c.explanation,
-      `Example: ${c.example}`,
+      `### ${i + 1}. ${c?.title || ''}`,
+      c?.explanation || '',
+      `Example: ${c?.example || ''}`,
       '',
     ]),
     '## Common Mistakes to Avoid',
@@ -440,41 +524,42 @@ document.getElementById('copy-notes-btn').addEventListener('click', async () => 
 
   try {
     await navigator.clipboard.writeText(markdown);
-    const btn = document.getElementById('copy-notes-btn');
+    const btn = getEl('copy-notes-btn');
     btn.textContent = 'Copied';
     setTimeout(() => {
       btn.textContent = 'Copy Notes';
     }, 2000);
   } catch {
-    // Clipboard unavailable
+    state.error = 'Could not copy to clipboard in this browser.';
+    render();
   }
 });
 
-document.getElementById('flashcard-el').addEventListener('click', toggleCardFlip);
-document.getElementById('flashcard-el').addEventListener('keydown', (e) => {
+getEl('flashcard-el').addEventListener('click', toggleCardFlip);
+getEl('flashcard-el').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     e.preventDefault();
     toggleCardFlip();
   }
 });
 
-document.getElementById('prev-btn').addEventListener('click', () => {
+getEl('prev-btn').addEventListener('click', () => {
   if (state.currentIndex > 0) goToCard(state.currentIndex - 1);
 });
 
-document.getElementById('next-btn').addEventListener('click', () => {
+getEl('next-btn').addEventListener('click', () => {
   if (state.currentIndex < state.flashcards.length - 1) goToCard(state.currentIndex + 1);
 });
 
-document.getElementById('hint-btn').addEventListener('click', () => {
+getEl('hint-btn').addEventListener('click', () => {
   state.showHint = !state.showHint;
   renderFlashcards();
 });
 
-document.getElementById('mastered-btn').addEventListener('click', () => markCard('mastered'));
-document.getElementById('review-btn').addEventListener('click', () => markCard('review'));
+getEl('mastered-btn').addEventListener('click', () => markCard('mastered'));
+getEl('review-btn').addEventListener('click', () => markCard('review'));
 
-document.getElementById('shuffle-btn').addEventListener('click', () => {
+getEl('shuffle-btn').addEventListener('click', () => {
   const copy = [...state.flashcards];
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -485,7 +570,7 @@ document.getElementById('shuffle-btn').addEventListener('click', () => {
   goToCard(0);
 });
 
-document.getElementById('reset-btn').addEventListener('click', () => {
+getEl('reset-btn').addEventListener('click', () => {
   state.topic = '';
   state.sourceNotes = '';
   state.files = [];
@@ -513,7 +598,9 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   if (state.mode !== 'flashcards' || state.flashcards.length === 0) return;
   const tag = /** @type {HTMLElement | null} */ (e.target)?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A' || tag === 'SELECT') {
+    return;
+  }
 
   if (e.code === 'Space') {
     e.preventDefault();

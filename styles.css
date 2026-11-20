@@ -591,8 +591,8 @@ button, input, textarea {
 
 .flashcard {
   position: relative;
+  display: grid;
   width: 100%;
-  min-height: 290px;
   cursor: pointer;
   transform-style: preserve-3d;
   transition: transform 300ms ease;
@@ -603,8 +603,8 @@ button, input, textarea {
 }
 
 .flashcard-face {
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
+  min-height: 290px;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   border-radius: 12px;
@@ -612,6 +612,7 @@ button, input, textarea {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  gap: 16px;
 }
 
 .flashcard-front {
