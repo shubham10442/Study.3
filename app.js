@@ -291,7 +291,7 @@ async function fetchStudyData(type) {
     } catch {
       if (response.status === 404 || response.status === 405) {
         throw new Error(
-          'Backend API not found. GitHub Pages only hosts static files — deploy server.js on a Node.js host (like Render or Railway) and set API_BASE in app.js.'
+          'Backend API not found. Make sure you deployed with Cloudflare Pages Functions (functions/ folder) or a Node.js backend.'
         );
       }
       throw new Error(`Server error (${response.status}). Please try again.`);
