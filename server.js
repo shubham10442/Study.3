@@ -193,6 +193,17 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '25mb' }));
 
+  app.use('/api', (req, res, next) => {
+    const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    return next();
+  });
+
   app.use((err, _req, res, next) => {
     if (err?.type === 'entity.too.large') {
       return res.status(413).json({
