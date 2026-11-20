@@ -129,23 +129,22 @@ async function askGeminiWithFallback(apiKey, parts, systemInstruction, responseS
   throw lastError;
 }
 
-export async function onRequestPost(context) {
-  const type = context.params.type;
-  if (type !== 'notes' && type !== 'flashcards') {
-    return Response.json({ error: 'API endpoint not found.' }, { status: 404 });
+async function handleStudyApi(type, request, env) {
+  if (request.method !== 'POST') {
+    return Response.json({ error: 'Method not allowed.' }, { status: 405 });
   }
 
-  const apiKey = (context.env.GEMINI_API_KEY || '').trim();
+  const apiKey = (env?.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
     return Response.json(
-      { error: 'GEMINI_API_KEY is missing. Add it in Cloudflare Pages Settings > Variables and Secrets.' },
+      { error: 'GEMINI_API_KEY is missing. Add it under Worker Settings > Variables and Secrets.' },
       { status: 401 }
     );
   }
 
   let body;
   try {
-    body = await context.request.json();
+    body = await request.json();
   } catch {
     return Response.json({ error: 'Invalid JSON request.' }, { status: 400 });
   }
@@ -192,7 +191,7 @@ export async function onRequestPost(context) {
     const message = err?.message || 'Could not reach Gemini API.';
 
     if (status === 401 || status === 403 || message.includes('API_KEY_INVALID') || message.toLowerCase().includes('api key')) {
-      return Response.json({ error: 'Invalid GEMINI_API_KEY. Check your Cloudflare Pages environment variable.' }, { status: 401 });
+      return Response.json({ error: 'Invalid GEMINI_API_KEY. Check your Worker Settings > Variables and Secrets.' }, { status: 401 });
     }
     if (status === 429 || message.includes('RESOURCE_EXHAUSTED')) {
       return Response.json({ error: 'Rate limit reached. Please wait a moment and try again.' }, { status: 429 });
@@ -203,3 +202,24 @@ export async function onRequestPost(context) {
     return Response.json({ error: message }, { status });
   }
 }
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/api/study/notes') {
+      return handleStudyApi('notes', request, env);
+    }
+    if (url.pathname === '/api/study/flashcards') {
+      return handleStudyApi('flashcards', request, env);
+    }
+    if (url.pathname.startsWith('/api/')) {
+      return Response.json({ error: 'API endpoint not found.' }, { status: 404 });
+    }
+
+    if (env?.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+    return new Response('Not found', { status: 404 });
+  },
+};

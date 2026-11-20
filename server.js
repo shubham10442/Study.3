@@ -183,13 +183,14 @@ app.post('/api/study/:type', async (req, res) => {
   }
 });
 
-app.get('/styles.css', (_req, res) => res.sendFile(path.join(__dirname, 'styles.css')));
-app.get('/app.js', (_req, res) => res.sendFile(path.join(__dirname, 'app.js')));
+const publicDir = path.join(__dirname, 'public');
+app.get('/styles.css', (_req, res) => res.sendFile(path.join(publicDir, 'styles.css')));
+app.get('/app.js', (_req, res) => res.sendFile(path.join(publicDir, 'app.js')));
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'API endpoint not found.' });
   }
-  res.sendFile(path.join(__dirname, 'index.html'));
+  res.sendFile(path.join(publicDir, 'index.html'));
 });
 
 app.listen(PORT, '0.0.0.0', () => {
