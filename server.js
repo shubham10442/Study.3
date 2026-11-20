@@ -2,11 +2,12 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
-const MODEL = 'gemini-4-hydrogen';
+const PRIMARY_MODEL = 'gemini-4-hydrogen';
+const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 
 function createGeminiClient() {
   if (!process.env.GEMINI_API_KEY) {
@@ -35,7 +36,7 @@ function getErrorStatus(err) {
   return 500;
 }
 
-async function withRetry(fn, maxRetries = 3) {
+async function withRetry(fn, maxRetries = 2) {
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -43,7 +44,7 @@ async function withRetry(fn, maxRetries = 3) {
     } catch (err) {
       lastError = err;
       const status = getErrorStatus(err);
-      const retryable = status === 429 || status === 500 || status === 503;
+      const retryable = status === 500 || status === 503 || (status === 429 && attempt === 0);
       if (!retryable || attempt === maxRetries) {
         throw err;
       }
@@ -54,17 +55,21 @@ async function withRetry(fn, maxRetries = 3) {
   throw lastError;
 }
 
-async function generateStructuredJson(parts, systemInstruction, responseSchema) {
-  const ai = createGeminiClient();
+async function callModelJson(ai, model, parts, systemInstruction, responseSchema) {
+  const config = {
+    systemInstruction,
+    responseMimeType: 'application/json',
+    responseSchema,
+  };
+  if (model === PRIMARY_MODEL) {
+    config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+  }
+
   const response = await withRetry(() =>
     ai.models.generateContent({
-      model: MODEL,
+      model,
       contents: { parts },
-      config: {
-        systemInstruction,
-        responseMimeType: 'application/json',
-        responseSchema,
-      },
+      config,
     })
   );
 
@@ -77,6 +82,21 @@ async function generateStructuredJson(parts, systemInstruction, responseSchema) 
     return JSON.parse(cleaned);
   } catch {
     throw new Error('Gemini returned an unexpected format. Please try again.');
+  }
+}
+
+async function generateStructuredJson(parts, systemInstruction, responseSchema) {
+  const ai = createGeminiClient();
+  try {
+    return await callModelJson(ai, PRIMARY_MODEL, parts, systemInstruction, responseSchema);
+  } catch (err) {
+    const status = getErrorStatus(err);
+    const shouldFallback = status === 429 || status === 503 || status === 404;
+    if (!shouldFallback) {
+      throw err;
+    }
+    console.warn(`Primary model ${PRIMARY_MODEL} returned ${status}; falling back to ${FALLBACK_MODEL}.`);
+    return await callModelJson(ai, FALLBACK_MODEL, parts, systemInstruction, responseSchema);
   }
 }
 
@@ -98,6 +118,8 @@ function handleApiError(res, error) {
   const status = getErrorStatus(error);
   const lower = cleanMessage.toLowerCase();
 
+  console.error(`Gemini API error (${status}):`, cleanMessage);
+
   if (
     status === 403 ||
     cleanMessage.includes('API_KEY_INVALID') ||
@@ -110,7 +132,8 @@ function handleApiError(res, error) {
   }
   if (status === 429 || cleanMessage.includes('RESOURCE_EXHAUSTED')) {
     return res.status(429).json({
-      error: 'Rate limit reached. Please wait a moment and try again.',
+      error:
+        'Gemini API quota or rate limit reached. Wait a moment and try again, or select a billing-enabled API key in Settings > Secrets.',
     });
   }
   if (status === 503 || cleanMessage.includes('UNAVAILABLE')) {
@@ -194,8 +217,7 @@ async function startServer() {
   app.use(express.json({ limit: '25mb' }));
 
   app.use('/api', (req, res, next) => {
-    const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') {
