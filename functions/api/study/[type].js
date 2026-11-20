@@ -1,56 +1,41 @@
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
-
-const PRIMARY_MODEL = 'gemini-4-hydrogen';
-const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+const MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 
 const NOTES_SCHEMA = {
-  type: Type.OBJECT,
+  type: 'OBJECT',
   properties: {
-    topicTitle: { type: Type.STRING },
-    subject: { type: Type.STRING },
-    overview: { type: Type.STRING },
+    topicTitle: { type: 'STRING' },
+    subject: { type: 'STRING' },
+    overview: { type: 'STRING' },
     keyConcepts: {
-      type: Type.ARRAY,
+      type: 'ARRAY',
       items: {
-        type: Type.OBJECT,
+        type: 'OBJECT',
         properties: {
-          title: { type: Type.STRING },
-          explanation: { type: Type.STRING },
-          example: { type: Type.STRING },
+          title: { type: 'STRING' },
+          explanation: { type: 'STRING' },
+          example: { type: 'STRING' },
         },
         required: ['title', 'explanation', 'example'],
       },
     },
-    commonMistakes: { type: Type.ARRAY, items: { type: Type.STRING } },
-    takeaways: { type: Type.ARRAY, items: { type: Type.STRING } },
+    commonMistakes: { type: 'ARRAY', items: { type: 'STRING' } },
+    takeaways: { type: 'ARRAY', items: { type: 'STRING' } },
   },
   required: ['topicTitle', 'subject', 'overview', 'keyConcepts', 'commonMistakes', 'takeaways'],
 };
 
 const FLASHCARDS_SCHEMA = {
-  type: Type.ARRAY,
+  type: 'ARRAY',
   items: {
-    type: Type.OBJECT,
+    type: 'OBJECT',
     properties: {
-      front: { type: Type.STRING },
-      back: { type: Type.STRING },
-      hint: { type: Type.STRING },
+      front: { type: 'STRING' },
+      back: { type: 'STRING' },
+      hint: { type: 'STRING' },
     },
     required: ['front', 'back', 'hint'],
   },
 };
-
-function getErrorStatus(err) {
-  if (typeof err?.status === 'number' && err.status >= 400) return err.status;
-  if (typeof err?.code === 'number' && err.code >= 400) return err.code;
-  try {
-    const parsed = JSON.parse(err?.message || '');
-    if (typeof parsed?.error?.code === 'number') return parsed.error.code;
-  } catch {
-    // Non-JSON message
-  }
-  return 500;
-}
 
 function buildParts(instruction, body = {}) {
   const topic = typeof body.topic === 'string' ? body.topic.trim() : '';
@@ -77,41 +62,92 @@ function buildParts(instruction, body = {}) {
   return parts;
 }
 
-async function askGeminiJson(apiKey, parts, systemInstruction, responseSchema) {
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-  });
-
-  async function runModel(model) {
-    const config = { systemInstruction, responseMimeType: 'application/json', responseSchema };
-    if (model === PRIMARY_MODEL) {
-      config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
-    }
-    const response = await ai.models.generateContent({ model, contents: { parts }, config });
-    const text = (response.text || '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
-    if (!text) throw new Error('Empty response from Gemini. Please try again.');
-    return JSON.parse(text);
+async function callGeminiModel(model, apiKey, parts, systemInstruction, responseSchema) {
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema,
+  };
+  if (model === 'gemini-4-hydrogen') {
+    generationConfig.thinkingConfig = { thinkingLevel: 'LOW' };
   }
 
-  try {
-    return await runModel(PRIMARY_MODEL);
-  } catch (err) {
-    const status = getErrorStatus(err);
-    if (status === 429 || status === 503 || status === 404) {
-      return await runModel(FALLBACK_MODEL);
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: [{ role: 'user', parts }],
+        generationConfig,
+      }),
     }
+  );
+
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(payload?.error?.message || `Gemini API error (${res.status})`);
+    err.status = res.status;
     throw err;
   }
-}
 
-export async function generateStudyResponse(type, body, apiKey) {
-  if (type !== 'notes' && type !== 'flashcards') {
-    return { status: 404, data: { error: 'API endpoint not found.' } };
+  const responseParts = payload?.candidates?.[0]?.content?.parts || [];
+  const rawText = responseParts
+    .filter((p) => typeof p?.text === 'string' && !p.thought)
+    .map((p) => p.text)
+    .join('')
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/```$/, '')
+    .trim();
+
+  if (!rawText) {
+    const err = new Error('Gemini returned an empty response. Please try again.');
+    err.status = 502;
+    throw err;
   }
 
+  return JSON.parse(rawText);
+}
+
+async function askGeminiWithFallback(apiKey, parts, systemInstruction, responseSchema) {
+  let lastError;
+  for (const model of MODELS) {
+    try {
+      return await callGeminiModel(model, apiKey, parts, systemInstruction, responseSchema);
+    } catch (err) {
+      lastError = err;
+      const status = err?.status || 500;
+      if (status !== 404 && status !== 429 && status !== 503) {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
+export async function onRequestPost(context) {
+  const type = context.params.type;
+  if (type !== 'notes' && type !== 'flashcards') {
+    return Response.json({ error: 'API endpoint not found.' }, { status: 404 });
+  }
+
+  const apiKey = (context.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
-    return { status: 401, data: { error: 'GEMINI_API_KEY is not configured.' } };
+    return Response.json(
+      { error: 'GEMINI_API_KEY is missing. Add it in Cloudflare Pages Settings > Variables and Secrets.' },
+      { status: 401 }
+    );
+  }
+
+  let body;
+  try {
+    body = await context.request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON request.' }, { status: 400 });
   }
 
   const instruction =
@@ -121,21 +157,24 @@ export async function generateStudyResponse(type, body, apiKey) {
 
   const parts = buildParts(instruction, body);
   if (!parts) {
-    return { status: 400, data: { error: 'Please enter a topic, paste notes, or upload a non-empty file.' } };
+    return Response.json(
+      { error: 'Please enter a topic, paste notes, or upload a non-empty file.' },
+      { status: 400 }
+    );
   }
 
   try {
     if (type === 'notes') {
-      const notes = await askGeminiJson(
+      const notes = await askGeminiWithFallback(
         apiKey,
         parts,
         'You are a helpful academic tutor. Write concise, accurate study notes with concrete examples.',
         NOTES_SCHEMA
       );
-      return { status: 200, data: { notes } };
+      return Response.json({ notes });
     }
 
-    const cards = await askGeminiJson(
+    const cards = await askGeminiWithFallback(
       apiKey,
       parts,
       'Create clear study flashcards: a specific question on the front, a short 1-3 sentence answer on the back, and a brief hint.',
@@ -147,41 +186,20 @@ export async function generateStudyResponse(type, body, apiKey) {
       back: String(card?.back ?? ''),
       hint: String(card?.hint ?? ''),
     }));
-    return { status: 200, data: { flashcards } };
+    return Response.json({ flashcards });
   } catch (err) {
-    const status = getErrorStatus(err);
-    let message = err?.message || 'Could not reach Gemini API.';
-    try {
-      message = JSON.parse(message)?.error?.message || message;
-    } catch {
-      // Plain string message
-    }
+    const status = err?.status || 500;
+    const message = err?.message || 'Could not reach Gemini API.';
 
-    if (status === 403 || message.includes('API_KEY_INVALID') || message.toLowerCase().includes('api key')) {
-      return { status: 401, data: { error: 'Invalid or missing GEMINI_API_KEY.' } };
+    if (status === 401 || status === 403 || message.includes('API_KEY_INVALID') || message.toLowerCase().includes('api key')) {
+      return Response.json({ error: 'Invalid GEMINI_API_KEY. Check your Cloudflare Pages environment variable.' }, { status: 401 });
     }
     if (status === 429 || message.includes('RESOURCE_EXHAUSTED')) {
-      return { status: 429, data: { error: 'Rate limit reached. Please wait a moment and try again.' } };
+      return Response.json({ error: 'Rate limit reached. Please wait a moment and try again.' }, { status: 429 });
     }
     if (status === 503 || message.includes('UNAVAILABLE')) {
-      return { status: 503, data: { error: 'Service temporarily busy. Please try again shortly.' } };
+      return Response.json({ error: 'Gemini is temporarily busy. Please try again shortly.' }, { status: 503 });
     }
-    return { status, data: { error: message } };
+    return Response.json({ error: message }, { status });
   }
-}
-
-export async function onRequestPost(context) {
-  let body;
-  try {
-    body = await context.request.json();
-  } catch {
-    return Response.json({ error: 'Invalid JSON request.' }, { status: 400 });
-  }
-
-  const { status, data } = await generateStudyResponse(
-    context.params.type,
-    body,
-    context.env.GEMINI_API_KEY
-  );
-  return Response.json(data, { status });
 }
